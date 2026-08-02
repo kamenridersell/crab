@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500;700;900&family=Noto+Sans+TC:wght@400;500;600;700&family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <style>
   :root{
     --ink:#111C24;
@@ -294,6 +295,11 @@
 <body>
 <div id="app"></div>
 <script>
+/* === 若要改用 Google 試算表當作網頁資料來源，請把「發布到網路」取得的 CSV 網址貼在這裡 ===
+   兩個都留空，系統會改用 data.json 或本機儲存資料，不影響原本功能。 */
+const SHEET_CSV_ENTRIES = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vScEm3zlvFnB3N8sNhriwbM1tb4T6MJeHMFbfiOvOlizFYSeUlg4xCzTluc1wtbk3kAIiqeg3T_R1WG/pub?gid=0&single=true&output=csv';
+const SHEET_CSV_TODOS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vScEm3zlvFnB3N8sNhriwbM1tb4T6MJeHMFbfiOvOlizFYSeUlg4xCzTluc1wtbk3kAIiqeg3T_R1WG/pub?gid=1865981850&single=true&output=csv';
+
 const CATEGORIES = ['合法合規','工廠建置','組織管理','營銷管理','品牌建置','其他事項'];
 const CATEGORY_COLORS = {
   '合法合規':'#C1440E','工廠建置':'#2F6F6B','組織管理':'#3B5166','營銷管理':'#3D6A8C','品牌建置':'#B8862E','其他事項':'#6B4C6B'
@@ -383,7 +389,67 @@ function seedData(){
   return {entries, todos};
 }
 
+function normalizeMonthLabel(v){
+  const m = String(v==null?'':v).match(/\d+/);
+  return m ? (parseInt(m[0]) + '月') : '';
+}
+
+function parseEntriesCsvRows(rows){
+  return rows
+    .filter(r => (r['項目']||'').toString().trim())
+    .map(r => ({
+      id: uid(),
+      year: parseInt(r['年份']) || new Date().getFullYear(),
+      month: parseInt((r['月份']||'').toString().match(/\d+/) ? (r['月份']||'').toString().match(/\d+/)[0] : r['月份']) || 1,
+      category: CATEGORIES.includes((r['分類']||'').trim()) ? r['分類'].trim() : '其他事項',
+      item: (r['項目']||'').toString().trim(),
+      content: (r['內容']||'').toString().trim(),
+      urgency: URGENCY.includes((r['緊急程度']||'').trim()) ? r['緊急程度'].trim() : '一般',
+      source: 'sheet', createdAt: ''
+    }));
+}
+
+function parseTodosCsvRows(rows){
+  return rows
+    .filter(r => (r['待辦事項']||'').toString().trim())
+    .map(r => ({
+      id: uid(),
+      year: parseInt(r['年份']) || new Date().getFullYear(),
+      category: CATEGORIES.includes((r['分類']||'').trim()) ? r['分類'].trim() : '其他事項',
+      task: (r['待辦事項']||'').toString().trim(),
+      status: STATUS.includes((r['狀態']||'').trim()) ? r['狀態'].trim() : '未啟動',
+      date: normalizeMonthLabel(r['月份']),
+      attachments: []
+    }));
+}
+
+async function tryLoadFromSheets(){
+  if(!SHEET_CSV_ENTRIES && !SHEET_CSV_TODOS) return false;
+  try{
+    const [entriesCsv, todosCsv] = await Promise.all([
+      SHEET_CSV_ENTRIES ? fetch(SHEET_CSV_ENTRIES, {cache:'no-store'}).then(r=>r.ok?r.text():null).catch(()=>null) : Promise.resolve(null),
+      SHEET_CSV_TODOS ? fetch(SHEET_CSV_TODOS, {cache:'no-store'}).then(r=>r.ok?r.text():null).catch(()=>null) : Promise.resolve(null)
+    ]);
+    let ok = false;
+    if(entriesCsv){
+      const parsed = Papa.parse(entriesCsv, {header:true, skipEmptyLines:true});
+      state.entries = parseEntriesCsvRows(parsed.data);
+      ok = true;
+    }
+    if(todosCsv){
+      const parsed = Papa.parse(todosCsv, {header:true, skipEmptyLines:true});
+      state.todos = parseTodosCsvRows(parsed.data);
+      ok = true;
+    }
+    if(ok){ state.hostedMode = true; return true; }
+  }catch(e){ /* 抓不到 Google 試算表，改走其他資料來源 */ }
+  return false;
+}
+
 async function loadData(){
+  let hostedDataUsed = await tryLoadFromSheets();
+
+  if(!hostedDataUsed){
   try{
     const res = await fetch('./data.json', {cache:'no-store'});
     if(res.ok){
@@ -392,14 +458,13 @@ async function loadData(){
         state.entries = data.entries || [];
         state.todos = data.todos || [];
         state.hostedMode = true;
-        state.authRole = 'client';
-        state.loaded = true;
-        render();
-        return;
+        hostedDataUsed = true;
       }
     }
-  }catch(e){ /* 不是網頁託管環境，或找不到 data.json，改走本機編輯流程 */ }
+  }catch(e){ /* 不是網頁託管環境，或找不到 data.json，改走本機儲存資料 */ }
+  }
 
+  if(!hostedDataUsed){
   try{
     const raw = localStorage.getItem('worklog-data');
     if(raw){
@@ -414,6 +479,7 @@ async function loadData(){
   }catch(e){
     const seed = seedData();
     state.entries = seed.entries; state.todos = seed.todos;
+  }
   }
   try{ state.apiKey = localStorage.getItem('worklog-api-key') || ''; }catch(e){ state.apiKey=''; }
   state.loaded = true;
@@ -448,6 +514,18 @@ function exportBackup(){
   showToast('備份檔已下載');
 }
 window.exportBackup = exportBackup;
+
+function exportDataJson(){
+  const data = {entries: state.entries, todos: state.todos, exportedAt: new Date().toISOString()};
+  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `data.json`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('data.json 已下載，請覆蓋掉網頁資料夾裡的舊檔並重新上傳');
+}
+window.exportDataJson = exportDataJson;
 
 function importBackupFile(input){
   if(!requireFullAccess()){ input.value=''; return; }
@@ -555,11 +633,10 @@ function renderHeader(){
         <div class="subtitle">芮叁食品工廠建廠與品牌發展．月度營運記錄系統</div>
       </div>
     </div>
-    ${state.hostedMode ? '' : `
     <div class="no-print" style="display:flex; align-items:center; gap:10px;">
       <span style="font-size:11.5px; color:#8FA0A7; font-weight:600;">${state.authRole==='full' ? '完整管理權限' : '客戶檢視權限'}</span>
       <button class="btn btn-ghost btn-sm" onclick="logout()">登出</button>
-    </div>`}
+    </div>
   </header>`;
 }
 
@@ -657,9 +734,10 @@ function renderDashboard(){
     </div>
     ${state.authRole==='full' ? `
     <div class="page-heading" style="margin-top:22px;">資料備份</div>
-    <div class="page-heading-desc">資料會自動儲存在您目前使用的這個瀏覽器裡。若要更換電腦、清過瀏覽器資料，或想留一份保險，建議定期匯出備份檔；下次可用「匯入備份」還原。</div>
+    <div class="page-heading-desc">資料會自動儲存在您目前使用的這個瀏覽器裡。若要更換電腦、清過瀏覽器資料，或想留一份保險，建議定期匯出備份檔；下次可用「匯入備份」還原。若您有把系統放上網頁託管，編輯完後可直接下載 <strong>data.json</strong>，覆蓋掉託管資料夾裡的舊檔重新上傳即可更新網頁上的內容。</div>
     <div class="card">
       <div class="btnrow" style="margin-top:0;">
+        <button class="btn btn-primary" onclick="exportDataJson()">下載 data.json（供網頁託管使用）</button>
         <button class="btn btn-secondary" onclick="exportBackup()">匯出備份</button>
         <label class="btn btn-ghost" style="cursor:pointer;">匯入備份
           <input type="file" accept=".json" style="display:none" onchange="importBackupFile(this)">
