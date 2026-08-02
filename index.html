@@ -397,7 +397,7 @@ let state = {
   todos: [],
   loaded:false,
   filterYear:'all', filterMonth:'all', filterCategory:'all',
-  expandedEntry:null, editingEntryId:null, dashboardExpandedMonth:null, dashboardYear:'all',
+  expandedEntry:null, editingEntryId:null, dashboardExpandedMonth:null, dashboardYear:'all', monthlyExpandedMonth:null,
   analyzeYear:2026, analyzeMonth:8, analyzeText:'', analyzing:false, analyzeError:null, drafts:[],
   apiKey:'', generatedPrompt:'',
   manual:{year:2026, month:8, category:CATEGORIES[0], item:'', content:'', urgency:'一般'},
@@ -499,12 +499,15 @@ function parseTodosCsvRows(rows){
 
 function sheetSync(action, payload){
   if(!SHEET_WEBAPP_URL) return;
-  try{
-    fetch(SHEET_WEBAPP_URL, {
-      method: 'POST',
-      body: JSON.stringify({ action, ...payload })
-    }).catch(()=>{ showToast('已在本機儲存，但同步到 Google 試算表失敗（可能是網路問題）'); });
-  }catch(e){ /* 忽略，不影響本機操作 */ }
+  fetch(SHEET_WEBAPP_URL, {
+    method: 'POST',
+    body: JSON.stringify({ action, ...payload })
+  }).then(res=>res.text()).then(text=>{
+    try{
+      const data = JSON.parse(text);
+      if(!data.ok){ showToast('同步到 Google 試算表失敗：' + (data.error || '未知錯誤')); }
+    }catch(e){ /* 讀不到回應內容不一定代表失敗，不特別處理 */ }
+  }).catch(()=>{ showToast('已在本機儲存，但同步到 Google 試算表失敗（可能是網路問題）'); });
 }
 
 async function tryLoadFromSheets(){
@@ -729,7 +732,7 @@ function renderHeader(){
 
 function renderNav(){
   const primaryTabs = [
-    ['analyze','LINE 記事'],['manual','手動記事'],['todos','待辦新增']
+    ['analyze','LINE 記事'],['manual','手動記事'],['monthly','月度記事'],['todos','待辦新增']
   ];
   const reportTabs = [
     ['dashboard','總覽'],['report','營運記事報告'],['todoreport','待辦事項報告']
@@ -753,6 +756,7 @@ function renderView(){
     case 'analyze': return renderAnalyze();
     case 'manual': return renderManual();
     case 'detail': return renderDetail();
+    case 'monthly': return renderMonthly();
     case 'todos': return renderTodos();
     case 'report': return renderReport();
     case 'todoreport': return renderTodoReport();
@@ -1170,6 +1174,62 @@ function addManual(){
 window.addManual = addManual;
 
 /* ---------- detail ---------- */
+function renderMonthly(){
+  const keys = {};
+  state.entries.forEach(e=>{ const k=monthKey(e.year,e.month); (keys[k]=keys[k]||{year:e.year,month:e.month,items:[]}); keys[k].items.push(e); });
+  const sortedKeys = Object.keys(keys).sort().reverse();
+
+  const groups = sortedKeys.map(k=>{
+    const info = keys[k];
+    const isOpen = state.monthlyExpandedMonth === k;
+    const items = info.items.slice().sort((a,b)=>CATEGORIES.indexOf(a.category)-CATEGORIES.indexOf(b.category));
+    return `<div class="month-card-group ${isOpen?'is-open':''}">
+      <div class="month-card" onclick="toggleMonthlyMonth('${k}')">
+        <div class="month-tab"><div class="ym">${info.year}年${info.month}月</div><div class="en">${MONTH_EN[info.month]} ${info.year}</div></div>
+        <div class="month-body"><span class="chip" style="background:#AD8339;">共 ${items.length} 則記事</span></div>
+      </div>
+      ${isOpen ? renderMonthlyEntries(items) : ''}
+    </div>`;
+  }).join('');
+
+  return `
+  <div class="page-heading">月度記事</div>
+  <div class="page-heading-desc">依年份月份整理所有記事，點選月份展開摘要列表，再點選單一記事可展開查看完整內容，並可編輯或刪除。</div>
+  <div class="card">
+    <div class="month-ledger">
+      ${groups || `<div class="empty-note">尚無記事，前往「LINE 記事」或「手動記事」開始建立記錄。</div>`}
+    </div>
+  </div>`;
+}
+
+function toggleMonthlyMonth(k){
+  state.monthlyExpandedMonth = state.monthlyExpandedMonth===k ? null : k;
+  render();
+}
+window.toggleMonthlyMonth = toggleMonthlyMonth;
+
+function renderMonthlyEntries(items){
+  return `<div class="month-inline-detail">${items.map(e=>`
+    <div class="entry">
+      <div class="entry-head" onclick="toggleExpand('${e.id}')">
+        <span class="chip" style="background:${CATEGORY_COLORS[e.category]}">${e.category}</span>
+        <span class="item-name">${esc(e.item)}</span>
+        <span class="badge-urg"><span class="urg-dot urg-${e.urgency}"></span>${e.urgency}</span>
+      </div>
+      ${state.expandedEntry===e.id ? (
+        state.editingEntryId===e.id ? renderEntryEditForm(e) : `
+        <div class="entry-content">${esc(e.content)}</div>
+        <div class="entry-meta">
+          <span class="tag-src">${e.source==='ai'?'AI 分析':(e.source==='sheet'?'試算表':'手動輸入')}</span>
+          <span>建立於 ${e.createdAt||''}</span>
+          <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); startEntryEdit('${e.id}')">編輯</button>
+          <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); deleteEntry('${e.id}')">刪除</button>
+        </div>
+      `) : ''}
+    </div>
+  `).join('')}</div>`;
+}
+
 function renderDetail(){
   const years = Array.from(new Set(state.entries.map(e=>e.year))).sort();
   let list = state.entries.slice().sort((a,b)=> CATEGORIES.indexOf(a.category)-CATEGORIES.indexOf(b.category) || a.year-b.year || a.month-b.month);
