@@ -97,10 +97,16 @@
 
   nav.tabs.tabs-primary{margin-bottom:9px;}
   nav.tabs.tabs-secondary{margin-bottom:28px;}
+  .hosted-banner{
+    background:#3A2A12; border:1px solid rgba(217,185,104,.5); color:#F2D9A0;
+    padding:11px 18px; border-radius:9px; font-size:12.5px; line-height:1.6;
+    margin-bottom:18px;
+  }
   .nav-group-label{
     font-size:10.5px; font-weight:700; letter-spacing:.14em; text-transform:uppercase;
     color:var(--gold-light); margin:0 0 7px 3px;
   }
+  .card{
     background:linear-gradient(175deg, #FFFEFA 0%, var(--paper) 55%, #F7F2E6 100%);
     color:var(--text-on-paper); border-radius:14px;
     padding:26px 28px; box-shadow:var(--shadow); border:1px solid rgba(0,0,0,.045);
@@ -299,6 +305,8 @@
    兩個都留空，系統會改用 data.json 或本機儲存資料，不影響原本功能。 */
 const SHEET_CSV_ENTRIES = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vScEm3zlvFnB3N8sNhriwbM1tb4T6MJeHMFbfiOvOlizFYSeUlg4xCzTluc1wtbk3kAIiqeg3T_R1WG/pub?gid=0&single=true&output=csv';
 const SHEET_CSV_TODOS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vScEm3zlvFnB3N8sNhriwbM1tb4T6MJeHMFbfiOvOlizFYSeUlg4xCzTluc1wtbk3kAIiqeg3T_R1WG/pub?gid=1865981850&single=true&output=csv';
+/* 若要讓新增/編輯/刪除「直接同步寫回」Google 試算表，請在下方貼上 Apps Script 部署後的 Web App 網址（留空則只單向讀取，不會寫回） */
+const SHEET_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbzISU_wuhxXnevWmbOVY_jWld5EPcTwSX8whb3zUFLsSICzphjErfSmbrS0tm_ZxCkg/exec';
 
 const CATEGORIES = ['合法合規','工廠建置','組織管理','營銷管理','品牌建置','其他事項'];
 const CATEGORY_COLORS = {
@@ -398,7 +406,7 @@ function parseEntriesCsvRows(rows){
   return rows
     .filter(r => (r['項目']||'').toString().trim())
     .map(r => ({
-      id: uid(),
+      id: (r['ID']||'').toString().trim() || uid(),
       year: parseInt(r['年份']) || new Date().getFullYear(),
       month: parseInt((r['月份']||'').toString().match(/\d+/) ? (r['月份']||'').toString().match(/\d+/)[0] : r['月份']) || 1,
       category: CATEGORIES.includes((r['分類']||'').trim()) ? r['分類'].trim() : '其他事項',
@@ -413,7 +421,7 @@ function parseTodosCsvRows(rows){
   return rows
     .filter(r => (r['待辦事項']||'').toString().trim())
     .map(r => ({
-      id: uid(),
+      id: (r['ID']||'').toString().trim() || uid(),
       year: parseInt(r['年份']) || new Date().getFullYear(),
       category: CATEGORIES.includes((r['分類']||'').trim()) ? r['分類'].trim() : '其他事項',
       task: (r['待辦事項']||'').toString().trim(),
@@ -421,6 +429,16 @@ function parseTodosCsvRows(rows){
       date: normalizeMonthLabel(r['月份']),
       attachments: []
     }));
+}
+
+function sheetSync(action, payload){
+  if(!SHEET_WEBAPP_URL) return;
+  try{
+    fetch(SHEET_WEBAPP_URL, {
+      method: 'POST',
+      body: JSON.stringify({ action, ...payload })
+    }).catch(()=>{ showToast('已在本機儲存，但同步到 Google 試算表失敗（可能是網路問題）'); });
+  }catch(e){ /* 忽略，不影響本機操作 */ }
 }
 
 async function tryLoadFromSheets(){
@@ -592,6 +610,10 @@ function render(){
   }
   app.innerHTML = `
     ${renderHeader()}
+    ${state.hostedMode ? (SHEET_WEBAPP_URL
+      ? `<div class="hosted-banner no-print">✅ 目前顯示的是 Google 試算表的資料，且新增／編輯／刪除會<strong>直接同步寫回</strong>試算表，其他人重新整理頁面就會看到最新內容。</div>`
+      : `<div class="hosted-banner no-print">⚠️ 目前顯示的是 Google 試算表的資料。在這個頁面上新增／編輯的內容只會暫存在您目前這個瀏覽器裡，<strong>不會寫回 Google 試算表</strong>，其他人或其他裝置都看不到。如需讓所有人看到最新內容，請直接到 Google 試算表編輯。</div>`
+    ) : ''}
     ${renderNav()}
     <div id="viewport">${renderView()}</div>
     ${state.view==='analyze' ? renderFooter() : ''}
@@ -856,11 +878,13 @@ function saveDrafts(){
   if(!requireFullAccess()) return;
   const toSave = state.drafts.filter(d=>d.include);
   toSave.forEach(d=>{
-    state.entries.push({
+    const entry = {
       id: uid(), year: state.analyzeYear, month: state.analyzeMonth,
       category: d.category, item: d.item, content: d.content, urgency: d.urgency,
       source:'ai', createdAt: new Date().toISOString().slice(0,10)
-    });
+    };
+    state.entries.push(entry);
+    sheetSync('addEntry', {id: entry.id, data: entry});
   });
   state.drafts = [];
   state.analyzeText = '';
@@ -1071,7 +1095,9 @@ function addManual(){
   const item = document.getElementById('mf-item').value.trim();
   const content = document.getElementById('mf-content').value.trim();
   if(!item || !content){ showToast('請填寫項目與內容'); return; }
-  state.entries.push({id:uid(), year, month, category, item, content, urgency, source:'manual', createdAt:new Date().toISOString().slice(0,10)});
+  const entry = {id:uid(), year, month, category, item, content, urgency, source:'manual', createdAt:new Date().toISOString().slice(0,10)};
+  state.entries.push(entry);
+  sheetSync('addEntry', {id: entry.id, data: entry});
   state.manual = {year, month, category:CATEGORIES[0], item:'', content:'', urgency:'一般'};
   saveData();
   showToast('已新增記事');
@@ -1135,7 +1161,7 @@ function renderDetail(){
 }
 function toggleExpand(id){ state.expandedEntry = state.expandedEntry===id ? null : id; render(); }
 window.toggleExpand = toggleExpand;
-function deleteEntry(id){ if(!requireFullAccess()) return; state.entries = state.entries.filter(e=>e.id!==id); saveData(); showToast('已刪除記事'); }
+function deleteEntry(id){ if(!requireFullAccess()) return; state.entries = state.entries.filter(e=>e.id!==id); sheetSync('deleteEntry', {id}); saveData(); showToast('已刪除記事'); }
 window.deleteEntry = deleteEntry;
 
 function renderEntryEditForm(e){
@@ -1180,6 +1206,7 @@ function saveEntryEdit(id){
   const content = document.getElementById('ee-content-'+id).value.trim();
   if(!item || !content){ showToast('項目與內容不可為空'); return; }
   e.year = year; e.month = month; e.category = category; e.urgency = urgency; e.item = item; e.content = content;
+  sheetSync('updateEntry', {id: e.id, data: e});
   state.editingEntryId = null;
   saveData();
   showToast('已儲存修改');
@@ -1328,7 +1355,9 @@ async function addTodo(){
       attachments = result;
     }catch(e){ showToast('附件讀取失敗，請重試'); return; }
   }
-  state.todos.push({id:uid(), year, category, task, status, date, attachments});
+  const todo = {id:uid(), year, category, task, status, date, attachments};
+  state.todos.push(todo);
+  sheetSync('addTodo', {id: todo.id, data: todo});
   state.todoForm = {year, category:CATEGORIES[0], task:'', status:'未啟動', date:''};
   saveData();
   showToast('已新增待辦事項');
@@ -1370,6 +1399,7 @@ async function saveTodoEdit(id){
     }catch(e){ showToast('附件讀取失敗，請重試'); return; }
   }
   td.year = year; td.category = category; td.task = task; td.status = status; td.date = date; td.attachments = attachments;
+  sheetSync('updateTodo', {id: td.id, data: td});
   state.editingTodoId = null;
   state.editingAttachments = [];
   saveData();
@@ -1377,7 +1407,7 @@ async function saveTodoEdit(id){
   render();
 }
 window.saveTodoEdit = saveTodoEdit;
-function deleteTodo(id){ if(!requireFullAccess()) return; state.todos = state.todos.filter(t=>t.id!==id); saveData(); showToast('已刪除待辦事項'); render(); }
+function deleteTodo(id){ if(!requireFullAccess()) return; state.todos = state.todos.filter(t=>t.id!==id); sheetSync('deleteTodo', {id}); saveData(); showToast('已刪除待辦事項'); render(); }
 window.deleteTodo = deleteTodo;
 
 /* ---------- report / export ---------- */
