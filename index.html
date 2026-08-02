@@ -331,7 +331,7 @@ let state = {
   reportYear:2026, reportSortMode:'category',
   todoReportYear:2026, todoReportSortMode:'category',
   toast:null,
-  authRole:null, authError:null,
+  authRole:null, authError:null, hostedMode:false,
 };
 
 function uid(){ return 'id'+Date.now()+Math.random().toString(36).slice(2,7); }
@@ -383,7 +383,23 @@ function seedData(){
   return {entries, todos};
 }
 
-function loadData(){
+async function loadData(){
+  try{
+    const res = await fetch('./data.json', {cache:'no-store'});
+    if(res.ok){
+      const data = await res.json();
+      if(data && (Array.isArray(data.entries) || Array.isArray(data.todos))){
+        state.entries = data.entries || [];
+        state.todos = data.todos || [];
+        state.hostedMode = true;
+        state.authRole = 'client';
+        state.loaded = true;
+        render();
+        return;
+      }
+    }
+  }catch(e){ /* 不是網頁託管環境，或找不到 data.json，改走本機編輯流程 */ }
+
   try{
     const raw = localStorage.getItem('worklog-data');
     if(raw){
@@ -539,10 +555,11 @@ function renderHeader(){
         <div class="subtitle">芮叁食品工廠建廠與品牌發展．月度營運記錄系統</div>
       </div>
     </div>
+    ${state.hostedMode ? '' : `
     <div class="no-print" style="display:flex; align-items:center; gap:10px;">
       <span style="font-size:11.5px; color:#8FA0A7; font-weight:600;">${state.authRole==='full' ? '完整管理權限' : '客戶檢視權限'}</span>
       <button class="btn btn-ghost btn-sm" onclick="logout()">登出</button>
-    </div>
+    </div>`}
   </header>`;
 }
 
