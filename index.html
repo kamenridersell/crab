@@ -430,7 +430,7 @@ let state = {
   editingTodoId:null, editingAttachments:[],
   reportYear:2026, reportSortMode:'category',
   todoReportYear:2026, todoReportSortMode:'category',
-  positions:[], positionForm:null, editingPositionId:null,
+  positions:[], positionForm:null, editingPositionId:null, positionPrintFilter:'all',
   toast:null,
   authRole:null, authError:null, hostedMode:false,
 };
@@ -1828,12 +1828,22 @@ function renderPositionSummary(pRaw){
   </div>`;
 }
 
+function positionSelectOptions(selectedId){
+  const opts = [`<option value="all" ${selectedId==='all'?'selected':''}>全部（不篩選）</option>`];
+  state.positions.forEach(p=>{
+    const label = `${p.title||'（未命名職位）'}${p.employeeName?'－'+p.employeeName:''}`;
+    opts.push(`<option value="${p.id}" ${selectedId===p.id?'selected':''}>${esc(label)}</option>`);
+  });
+  return opts.join('');
+}
+
 function renderOrgChart(){
   const f = state.positionForm;
   const rows = state.positions.map(p=>{
     if(state.editingPositionId === p.id) return renderPositionEditForm(p);
+    const hideForPrint = state.positionPrintFilter!=='all' && state.positionPrintFilter!==p.id;
     return `
-    <div class="entry">
+    <div class="entry${hideForPrint?' no-print':''}">
       ${renderPositionSummary(p)}
       <div class="entry-meta no-print">
         <button class="btn btn-ghost btn-sm" onclick="startPositionEdit('${p.id}')">編輯</button>
@@ -1850,6 +1860,13 @@ function renderOrgChart(){
     <div class="btnrow"><button class="btn btn-primary" onclick="addPosition()">新增職位</button></div>
   </div>
   <div class="card no-print">
+    <div class="filters">
+      <div class="f"><label class="field">選擇列印內容（職稱＋員工姓名）</label>
+        <select onchange="state.positionPrintFilter=this.value; render();">
+          ${positionSelectOptions(state.positionPrintFilter)}
+        </select>
+      </div>
+    </div>
     <div class="btnrow"><button class="btn btn-secondary" onclick="window.print()">列印／另存 PDF</button></div>
   </div>
   <div class="card">
@@ -1913,8 +1930,9 @@ window.deletePosition = deletePosition;
 function renderOrgChartReport(){
   const list = state.positions;
   const itemsHtml = list.map(p=>{
+    const hideForPrint = state.positionPrintFilter!=='all' && state.positionPrintFilter!==p.id;
     return `
-    <div class="report-item" style="--cat-color:#AD8339;">
+    <div class="report-item${hideForPrint?' no-print':''}" style="--cat-color:#AD8339;">
       ${renderPositionSummary(p)}
     </div>`;
   }).join('');
@@ -1923,6 +1941,13 @@ function renderOrgChartReport(){
   <div class="page-heading no-print">工作說明書</div>
   <div class="page-heading-desc no-print">此頁為唯讀的工作說明書資訊，包含各職位之工作說明書與薪資結構，適合直接提供給客戶查看。</div>
   <div class="card no-print">
+    <div class="filters">
+      <div class="f"><label class="field">選擇列印內容（職稱＋員工姓名）</label>
+        <select onchange="state.positionPrintFilter=this.value; render();">
+          ${positionSelectOptions(state.positionPrintFilter)}
+        </select>
+      </div>
+    </div>
     <div class="btnrow"><button class="btn btn-secondary" onclick="window.print()">列印／另存 PDF</button></div>
   </div>
   <div class="report-doc">
